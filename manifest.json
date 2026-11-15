@@ -1,7 +1,7 @@
 {
-  "name": "NextGen.TV - Área do Cliente",
-  "short_name": "NextGen.TV",
-  "description": "Área do cliente NextGen.TV",
+  "name": "NextGen TV - Painel Master",
+  "short_name": "Painel NextGen",
+  "description": "Painel Master NextGen.TV",
   "lang": "pt-BR",
   "id": "./",
   "start_url": "./",

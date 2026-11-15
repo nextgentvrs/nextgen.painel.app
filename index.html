@@ -3,23 +3,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NextGen.TV - Área do Cliente</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    
+    <title>NextGen TV - Painel Master & Clientes</title>
     <!-- PWA: app instalável -->
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#000000">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="NextGen.TV">
+    <meta name="apple-mobile-web-app-title" content="Painel NextGen">
     <link rel="icon" type="image/png" href="icon-192.png">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
 
+    <script src="https://cdn.tailwindcss.com"></script>
+    
     <!-- SDKs do Firebase (Modular v10) -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getFirestore, doc, getDoc, collection, getDocs, setDoc, onSnapshot, query, where, runTransaction, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getFirestore, collection, getDocs, deleteDoc, doc, setDoc, getDoc, updateDoc, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyBrp9JlMd9zBUqzByPRBLCStLiLbH5z80Y",
@@ -32,427 +33,514 @@
 
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        let imagemBase64Atual = "";
         const SERVIDOR_FIXO = "http://plus.lat";
 
-        window.fazerLoginCliente = async () => {
-            const telefoneInput = document.getElementById('telefoneLogin').value.trim().replace(/\D/g, '');
-            const erroEl = document.getElementById('erroLogin');
-            erroEl.innerText = "";
+        // ================= CLIENTES =================
+        async function carregarClientes() {
+            const tabelaClientes = document.getElementById('tabelaClientesCorpo');
+            const totalClientes = document.getElementById('totalClientes');
+            if (tabelaClientes) tabelaClientes.innerHTML = '<tr><td colspan="6" class="text-center py-6 text-zinc-500">A carregar clientes...</td></tr>';
 
-            if (!telefoneInput) {
-                erroEl.innerText = "Por favor, digite o seu número de WhatsApp/Telefone.";
+            try {
+                const querySnapshot = await getDocs(collection(db, "clientes"));
+                if (tabelaClientes) tabelaClientes.innerHTML = '';
+                let contador = 0;
+
+                querySnapshot.forEach((documento) => {
+                    contador++;
+                    const dados = documento.data();
+                    const whatsappKey = documento.id;
+                    const telLimpo = whatsappKey.replace(/\D/g, '');
+
+                    let statusHtml = "";
+                    let diffDiasGlobal = 999;
+
+                    if (dados.dataCadastro && dados.diasValidade !== undefined) {
+                        const dataCadastro = new Date(dados.dataCadastro);
+                        const msValidade = dados.diasValidade * 24 * 60 * 60 * 1000;
+                        const dataVencimento = new Date(dataCadastro.getTime() + msValidade);
+                        const agora = new Date();
+                        const diffMs = dataVencimento - agora;
+                        const diffHoras = Math.floor(diffMs / (1000 * 60 * 60));
+                        diffDiasGlobal = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+
+                        if (diffMs > 0) {
+                            if (diffDiasGlobal >= 1) {
+                                statusHtml = `<span class="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">⏳ ${diffDiasGlobal} dias</span>`;
+                            } else {
+                                statusHtml = `<span class="px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30">⏳ ${diffHoras} horas</span>`;
+                            }
+                        } else {
+                            statusHtml = `<span class="px-2.5 py-1 rounded-full text-xs font-semibold bg-red-500/20 text-red-400 border border-red-500/30">❌ Expirado</span>`;
+                        }
+                    } else {
+                        statusHtml = `<span class="text-xs text-zinc-500">-</span>`;
+                    }
+
+                    const tr = document.createElement('tr');
+                    tr.className = "border-b border-zinc-900 hover:bg-zinc-900/55 transition align-middle";
+                    
+                    tr.innerHTML = `
+                        <td class="px-6 py-4 font-medium text-white">${dados.nome || 'N/D'}</td>
+                        <td class="px-6 py-4 text-zinc-300 font-mono">${whatsappKey}</td>
+                        <td class="px-6 py-4 text-zinc-300 font-mono text-xs">
+                            <span class="text-blue-400">U:</span> ${dados.usuario || '-'}<br>
+                            <span class="text-blue-400">S:</span> ${dados.senha || '-'}
+                        </td>
+                        <td class="px-6 py-4 text-blue-400 font-semibold text-xs">${dados.nomePlano || 'Personalizado'}</td>
+                        <td class="px-6 py-4">${statusHtml}</td>
+                        <td class="px-6 py-4 text-right space-x-1 space-y-1" id="acoes-${telLimpo}"></td>
+                    `;
+
+                    if (tabelaClientes) tabelaClientes.appendChild(tr);
+
+                    const acoesTd = document.getElementById(`acoes-${telLimpo}`);
+                    if (acoesTd) {
+                        const bZap = document.createElement('button');
+                        bZap.className = 'bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white border border-emerald-600/30 px-2 py-1.5 rounded-lg text-xs font-semibold transition';
+                        bZap.textContent = '💬 Wpp';
+                        bZap.title = 'Enviar Cobrança / Acesso no WhatsApp';
+                        bZap.onclick = () => window.enviarMensagemRenovacao(dados.nome || 'Cliente', diffDiasGlobal, telLimpo, dados);
+                        acoesTd.append(bZap);
+
+                        const bInterno = document.createElement('button');
+                        bInterno.className = 'bg-blue-600/20 hover:bg-blue-600 text-blue-400 hover:text-white border border-blue-600/30 px-2 py-1.5 rounded-lg text-xs font-semibold transition';
+                        bInterno.textContent = '📱 App';
+                        bInterno.title = 'Enviar mensagem direta para o App deste cliente';
+                        bInterno.onclick = () => window.abrirModalMensagemIndividual(whatsappKey, dados.nome || '');
+                        acoesTd.append(bInterno);
+
+                        const bEdit = document.createElement('button');
+                        bEdit.className = 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 px-2 py-1.5 rounded-lg text-xs font-semibold transition';
+                        bEdit.textContent = 'Editar';
+                        bEdit.onclick = () => window.abrirModalEditar(whatsappKey, dados);
+                        acoesTd.append(bEdit);
+
+                        const bDel = document.createElement('button');
+                        bDel.className = 'bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white border border-red-600/30 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition';
+                        bDel.textContent = 'Excluir';
+                        bDel.onclick = () => window.excluirCliente(whatsappKey, dados.nome || '');
+                        acoesTd.append(bDel);
+                    }
+                });
+
+                if (totalClientes) totalClientes.innerText = `${contador} clientes`;
+
+                if (contador === 0 && tabelaClientes) {
+                    tabelaClientes.innerHTML = '<tr><td colspan="6" class="text-center py-6 text-zinc-500">Nenhum cliente cadastrado.</td></tr>';
+                }
+
+            } catch (error) {
+                console.error("Erro ao carregar clientes: ", error);
+                if (tabelaClientes) tabelaClientes.innerHTML = '<tr><td colspan="6" class="text-center py-6 text-red-500">Erro ao carregar os clientes do Firebase.</td></tr>';
+            }
+        }
+
+        window.enviarMensagemRenovacao = (nomeCliente, diasRestantes, telefoneCliente, dados) => {
+            let textoMsg = "";
+            if (diasRestantes <= 5 && diasRestantes > 0) {
+                textoMsg = `Olá ${nomeCliente}, seu plano na *NextGen TV* irá expirar em *${diasRestantes} dia(s)*. Renove agora mesmo para garantir sua continuidade! 📺✨`;
+            } else if (diasRestantes <= 0) {
+                textoMsg = `Olá ${nomeCliente}, seu plano na *NextGen TV* expirou! Renove agora mesmo para continuar aproveitando todos os canais, filmes e séries sem interrupções. 🚀`;
+            } else {
+                textoMsg = `Olá ${nomeCliente}! Seguem seus dados de acesso da *NextGen TV*:\n\n` +
+                    `👤 *Usuário:* ${dados.usuario || '-'}\n` +
+                    `🔑 *Senha:* ${dados.senha || '-'}\n` +
+                    `🌐 *Servidor:* ${SERVIDOR_FIXO}\n\n` +
+                    `Qualquer dúvida estamos à disposição! 🚀`;
+            }
+
+            const urlWpp = `https://api.whatsapp.com/send?phone=55${telefoneCliente}&text=${encodeURIComponent(textoMsg)}`;
+            window.open(urlWpp, '_blank');
+        };
+
+        window.salvarNovoCliente = async () => {
+            const nome = document.getElementById('novoNomeCliente').value.trim();
+            const whatsapp = document.getElementById('novoZapCliente').value.trim().replace(/\D/g, '');
+            const usuario = document.getElementById('novoUsuarioCliente').value.trim();
+            const senha = document.getElementById('novoSenhaCliente').value.trim();
+            const selectPlano = document.getElementById('novoPlanoCliente');
+            const planoValor = selectPlano.value; 
+
+            if (!nome || !whatsapp) {
+                alert("Preencha pelo menos o Nome e o WhatsApp do cliente.");
                 return;
             }
 
-            try {
-                const docRef = doc(db, "clientes", telefoneInput);
-                const docSnap = await getDoc(docRef);
+            const partes = planoValor.split('|');
+            const diasValidade = parseFloat(partes[0]);
+            const nomePlano = partes[1];
 
+            try {
+                await setDoc(doc(db, "clientes", whatsapp), {
+                    nome: nome,
+                    telefone: whatsapp,
+                    usuario: usuario || "",
+                    senha: senha || "",
+                    diasValidade: diasValidade,
+                    nomePlano: nomePlano,
+                    dataCadastro: new Date().toISOString()
+                });
+
+                alert("Cliente cadastrado com sucesso!");
+                document.getElementById('novoNomeCliente').value = '';
+                document.getElementById('novoZapCliente').value = '';
+                document.getElementById('novoUsuarioCliente').value = '';
+                document.getElementById('novoSenhaCliente').value = '';
+                carregarClientes();
+            } catch (error) {
+                console.error("Erro ao salvar cliente:", error);
+                alert("Erro ao cadastrar cliente.");
+            }
+        };
+
+        let clienteZapAtualMsg = "";
+        window.abrirModalMensagemIndividual = (whatsappKey, nomeCliente) => {
+            clienteZapAtualMsg = whatsappKey;
+            document.getElementById('tituloMsgIndividual').innerText = `Enviar Mensagem Interna para: ${nomeCliente}`;
+            document.getElementById('inputTituloIndividual').value = "";
+            document.getElementById('inputTextoIndividual').value = "";
+            document.getElementById('modalMensagemIndividual').classList.remove('hidden');
+            carregarHistoricoMsgs();
+        };
+
+        window.fecharModalMensagemIndividual = () => {
+            document.getElementById('modalMensagemIndividual').classList.add('hidden');
+        };
+
+        async function carregarHistoricoMsgs() {
+            const box = document.getElementById('listaMsgsIndividual');
+            box.innerHTML = '<p class="text-[11px] text-zinc-500">A carregar...</p>';
+            try {
+                const snap = await getDocs(collection(db, "clientes", clienteZapAtualMsg, "mensagens_app"));
+                const msgs = [];
+                snap.forEach((d) => msgs.push({ id: d.id, ...d.data() }));
+                msgs.sort((a, b) => (b.data || '').localeCompare(a.data || ''));
+                box.innerHTML = msgs.length ? msgs.slice(0, 15).map((m) => `
+                    <div class="flex items-start justify-between gap-2 bg-black border border-zinc-900 rounded-lg px-3 py-2">
+                        <div class="min-w-0">
+                            <p class="text-[11px] text-zinc-500">${m.data ? new Date(m.data).toLocaleString('pt-BR') : ''} · ${escHtml(m.titulo || '')}</p>
+                            <p class="text-xs text-zinc-200 break-words">${escHtml(m.mensagem)}</p>
+                        </div>
+                        <button onclick="apagarMensagemIndividual('${m.id}')" class="text-red-400 hover:text-red-300 text-[11px] shrink-0">apagar</button>
+                    </div>`).join('') : '<p class="text-[11px] text-zinc-500">Nenhuma mensagem enviada ainda.</p>';
+            } catch (e) {
+                console.error(e);
+                box.innerHTML = '<p class="text-[11px] text-red-400">Não foi possível carregar o histórico.</p>';
+            }
+        }
+
+        window.apagarMensagemIndividual = async (id) => {
+            if (!confirm('Apagar esta mensagem do app do cliente?')) return;
+            try {
+                await deleteDoc(doc(db, "clientes", clienteZapAtualMsg, "mensagens_app", id));
+                carregarHistoricoMsgs();
+            } catch (e) { alert('Erro ao apagar: ' + e.message); }
+        };
+
+        window.enviarMensagemIndividualApp = async () => {
+            const titulo = document.getElementById('inputTituloIndividual').value.trim();
+            const texto = document.getElementById('inputTextoIndividual').value.trim();
+            if (!texto) { alert("Digite uma mensagem!"); return; }
+
+            try {
+                await addDoc(collection(db, "clientes", clienteZapAtualMsg, "mensagens_app"), {
+                    titulo: titulo || "Mensagem do Suporte",
+                    mensagem: texto,
+                    data: new Date().toISOString(),
+                    lida: false
+                });
+
+                alert("Mensagem enviada! O cliente será avisado no celular.");
+                document.getElementById('inputTituloIndividual').value = "";
+                document.getElementById('inputTextoIndividual').value = "";
+                carregarHistoricoMsgs();
+            } catch (e) {
+                console.error("Erro ao enviar mensagem interna:", e);
+                alert("Erro ao enviar mensagem: " + e.message);
+            }
+        };
+
+        window.enviarParaPlayer = async () => {
+            const titulo = document.getElementById('tituloPlayerInput').value.trim();
+            const mensagem = document.getElementById('mensagemPlayerInput').value.trim();
+            if (!mensagem) { alert("Escreva uma mensagem antes de enviar!"); return; }
+            try {
+                await setDoc(doc(db, "configuracoes", "aviso_player"), {
+                    titulo: titulo || "Aviso Importante",
+                    mensagem: mensagem,
+                    imagem: imagemBase64Atual || "",
+                    ativo: true,
+                    atualizadoEm: new Date().toISOString()
+                });
+                alert("Mensagem geral disparada com sucesso para todos os apps!");
+            } catch (error) { console.error("Erro ao salvar:", error); }
+        };
+
+        window.desativarNoPlayer = async () => {
+            try {
+                await setDoc(doc(db, "configuracoes", "aviso_player"), { ativo: false }, { merge: true });
+                alert("Mensagem geral desativada!");
+            } catch (error) { console.error(error); }
+        };
+
+        const calcDiasRestantes = (dados) => {
+            if (!dados || !dados.dataCadastro || dados.diasValidade === undefined) return 0;
+            const ms = new Date(dados.dataCadastro).getTime() + dados.diasValidade * 86400000 - Date.now();
+            return Math.max(0, Math.ceil(ms / 86400000));
+        };
+
+        window.atualizarInfoVenc = () => {
+            const v = parseInt(document.getElementById('editDiasRestantes').value, 10);
+            const info = document.getElementById('editVencInfo');
+            if (isNaN(v) || v < 0) { info.textContent = ''; return; }
+            if (v === 0) { info.textContent = 'O plano ficará expirado.'; return; }
+            const d = new Date(Date.now() + v * 86400000);
+            info.textContent = 'Vence em ' + d.toLocaleDateString('pt-BR') + '.';
+        };
+
+        window.ajustarDiasRestantes = (n) => {
+            const campo = document.getElementById('editDiasRestantes');
+            if (n === 'zero') { campo.value = 0; }
+            else { campo.value = (parseInt(campo.value, 10) || 0) + n; }
+            atualizarInfoVenc();
+        };
+
+        window.abrirModalEditar = (whatsappKey, dados) => {
+            document.getElementById('editWhatsappOriginal').value = whatsappKey;
+            document.getElementById('editNomeCliente').value = dados.nome || '';
+            document.getElementById('editZapCliente').value = dados.telefone || whatsappKey;
+            document.getElementById('editUsuarioCliente').value = dados.usuario || '';
+            document.getElementById('editSenhaCliente').value = dados.senha || '';
+            document.getElementById('editPlanoCliente').value = dados.diasValidade ? `${dados.diasValidade}|${dados.nomePlano || 'Personalizado'}` : '30|30 Dias (Mensal)';
+
+            const rest = calcDiasRestantes(dados);
+            document.getElementById('editDiasRestantes').value = rest;
+            document.getElementById('editRestOrig').value = rest;
+            document.getElementById('editDataCadastroOrig').value = dados.dataCadastro || '';
+            atualizarInfoVenc();
+
+            document.getElementById('modalEditarCliente').classList.remove('hidden');
+        };
+
+        window.fecharModalEditar = () => {
+            document.getElementById('modalEditarCliente').classList.add('hidden');
+        };
+
+        window.salvarEdicaoCliente = async () => {
+            const whatsappOriginal = document.getElementById('editWhatsappOriginal').value;
+            const nome = document.getElementById('editNomeCliente').value.trim();
+            const novoZap = document.getElementById('editZapCliente').value.trim().replace(/\D/g, '');
+            const usuario = document.getElementById('editUsuarioCliente').value.trim();
+            const senha = document.getElementById('editSenhaCliente').value.trim();
+            const planoValor = document.getElementById('editPlanoCliente').value;
+
+            if (!nome || !novoZap) { alert("Nome e WhatsApp são obrigatórios."); return; }
+
+            const partes = planoValor.split('|');
+            let diasValidade = parseFloat(partes[0]);
+            const nomePlano = partes[1];
+
+            const restOrig = parseInt(document.getElementById('editRestOrig').value, 10);
+            const restTxt = document.getElementById('editDiasRestantes').value;
+            const restNovo = parseInt(restTxt, 10);
+            const mudouDias = restTxt !== '' && !isNaN(restNovo) && restNovo >= 0 && restNovo !== restOrig;
+            const cadOrig = document.getElementById('editDataCadastroOrig').value;
+            let dataCadastro = cadOrig || new Date().toISOString();
+            if (mudouDias) {
+                diasValidade = restNovo;
+                dataCadastro = new Date().toISOString();
+            }
+
+            try {
+                if (whatsappOriginal !== novoZap) {
+                    await setDoc(doc(db, "clientes", novoZap), {
+                        nome: nome, telefone: novoZap, usuario: usuario || "", senha: senha || "",
+                        diasValidade: diasValidade, nomePlano: nomePlano, dataCadastro: dataCadastro
+                    });
+                    await deleteDoc(doc(db, "clientes", whatsappOriginal));
+                } else {
+                    const payload = { nome: nome, telefone: novoZap, usuario: usuario || "", senha: senha || "", diasValidade: diasValidade, nomePlano: nomePlano };
+                    if (mudouDias) payload.dataCadastro = dataCadastro;
+                    await updateDoc(doc(db, "clientes", whatsappOriginal), payload);
+                }
+
+                alert("Cliente atualizado com sucesso!");
+                fecharModalEditar();
+                carregarClientes();
+            } catch (error) {
+                console.error("Erro ao atualizar cliente:", error);
+                alert("Erro ao atualizar os dados do cliente.");
+            }
+        };
+
+        window.excluirCliente = async (whatsappKey, nomeCliente) => {
+            if (confirm(`Deseja excluir o cliente "${nomeCliente}" (WhatsApp: ${whatsappKey})?`)) {
+                try {
+                    await deleteDoc(doc(db, "clientes", whatsappKey));
+                    alert("Cliente excluído com sucesso!");
+                    carregarClientes();
+                } catch (error) {
+                    console.error("Erro ao excluir:", error);
+                    alert("Não foi possível excluir o cliente.");
+                }
+            }
+        };
+
+        async function carregarPedidosOrcamentos() {
+            const tabelaPedidos = document.getElementById('tabelaPedidosCorpo');
+            const totalPedidos = document.getElementById('totalPedidos');
+            if (tabelaPedidos) tabelaPedidos.innerHTML = '<tr><td colspan="6" class="text-center py-6 text-zinc-500">A carregar pedidos...</td></tr>';
+
+            try {
+                const querySnapshot = await getDocs(collection(db, "projetos_clientes"));
+                if (tabelaPedidos) tabelaPedidos.innerHTML = '';
+                let contador = 0;
+
+                querySnapshot.forEach((documento) => {
+                    contador++;
+                    const dados = documento.data();
+                    const idDoc = documento.id;
+                    const dataCriacao = dados.criadoEm && dados.criadoEm.toDate ? dados.criadoEm.toDate().toLocaleString('pt-BR') : 'Recente';
+
+                    let coresHtml = "Padrão";
+                    if (dados.cores) {
+                        coresHtml = Object.entries(dados.cores).map(([k, v]) => 
+                            `<span class="px-1.5 py-0.5 rounded text-[10px] border border-zinc-700 text-zinc-300 flex items-center gap-1 inline-flex"><span class="w-2 h-2 rounded-full inline-block" style="background:${v}"></span>${v}</span>`
+                        ).join(' ');
+                    }
+
+                    let imgHtml = "Sem imagem";
+                    if (dados.playerImage) {
+                        imgHtml = `<img src="${dados.playerImage}" class="w-20 h-12 object-cover rounded border border-zinc-800 cursor-pointer hover:scale-150 transition origin-left" onclick="const w = window.open(''); w.document.write('<img src=\\'${dados.playerImage}\\' style=\\'max-width:100%; background:#000;\\'>');">`;
+                    }
+
+                    const tr = document.createElement('tr');
+                    tr.className = "border-b border-zinc-900 hover:bg-zinc-900/55 transition align-middle";
+                    tr.innerHTML = `
+                        <td class="px-6 py-4"><span class="font-bold text-white">${dados.appName || 'Sem Nome'}</span><br><span class="text-xs text-zinc-400">${dados.appContact || ''}</span></td>
+                        <td class="px-6 py-4"><div class="flex flex-wrap gap-1 items-center text-xs font-mono">${coresHtml}</div></td>
+                        <td class="px-6 py-4"><span class="text-blue-400 font-semibold">${dados.planoSelecionado || 'Plano'}</span><br><span class="text-xs text-emerald-400 font-bold">${dados.resumoTotal || ''}</span></td>
+                        <td class="px-6 py-4">${imgHtml}</td>
+                        <td class="px-6 py-4 text-zinc-500 text-xs">${dataCriacao}</td>
+                        <td class="px-6 py-4 text-right" id="pedido-acoes-${idDoc}"></td>
+                    `;
+
+                    if (tabelaPedidos) tabelaPedidos.appendChild(tr);
+
+                    const acoesTd = document.getElementById(`pedido-acoes-${idDoc}`);
+                    if (acoesTd) {
+                        const bDel = document.createElement('button');
+                        bDel.className = 'bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white border border-red-600/30 px-3 py-1.5 rounded-lg text-xs font-semibold transition';
+                        bDel.textContent = 'Excluir';
+                        bDel.onclick = async () => {
+                            if (confirm(`Deseja apagar este pedido de "${dados.appName}"?`)) {
+                                await deleteDoc(doc(db, "projetos_clientes", idDoc));
+                                alert('Pedido removido com sucesso!');
+                                carregarPedidosOrcamentos();
+                            }
+                        };
+                        acoesTd.append(bDel);
+                    }
+                });
+
+                if (totalPedidos) totalPedidos.innerText = `${contador} pedidos`;
+                if (contador === 0 && tabelaPedidos) tabelaPedidos.innerHTML = '<tr><td colspan="6" class="text-center py-6 text-zinc-500">Nenhum pedido recebido.</td></tr>';
+            } catch (error) {
+                console.error("Erro ao carregar projetos:", error);
+            }
+        }
+
+        async function carregarMensagemPlayerAtual() {
+            try {
+                const docRef = doc(db, "configuracoes", "aviso_player");
+                const docSnap = await getDoc(docRef);
                 if (docSnap.exists()) {
                     const dados = docSnap.data();
-                    
-                    localStorage.setItem('nextgen_cliente', JSON.stringify({
-                        id: telefoneInput,
-                        ...dados
-                    }));
-
-                    carregarPainelCliente(telefoneInput, dados);
-                } else {
-                    erroEl.innerText = "Telefone não encontrado no sistema. Solicite acesso ao suporte!";
-                }
-            } catch (e) {
-                console.error("Erro ao fazer login:", e);
-                erroEl.innerText = "Erro ao conectar com o servidor.";
-            }
-        };
-
-        async function carregarPainelCliente(telefone, dados, soDados = false) {
-            document.getElementById('telaLoginCliente').classList.add('hidden');
-            document.getElementById('painelCliente').classList.remove('hidden');
-
-            document.getElementById('nomeClienteExibicao').innerText = dados.nome || 'Cliente VIP';
-            document.getElementById('planoClienteExibicao').innerText = dados.nomePlano || 'Plano Ativo';
-            document.getElementById('usuarioExibicao').innerText = dados.usuario || 'Não configurado';
-            document.getElementById('senhaExibicao').innerText = dados.senha || 'Não configurado';
-            document.getElementById('servidorExibicao').innerText = SERVIDOR_FIXO;
-
-            if (dados.dataCadastro && dados.diasValidade !== undefined) {
-                const dataCadastro = new Date(dados.dataCadastro);
-                const msValidade = dados.diasValidade * 24 * 60 * 60 * 1000;
-                const dataVencimento = new Date(dataCadastro.getTime() + msValidade);
-                const diffMs = dataVencimento - new Date();
-                const diffDias = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
-
-                const statusEl = document.getElementById('statusVencimentoExibicao');
-                if (diffMs > 0) {
-                    statusEl.innerText = `Expira em ${diffDias} dia(s)`;
-                    statusEl.className = "text-xs px-3 py-1 rounded-full font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
-                } else {
-                    statusEl.innerText = "Plano Expirado ⚠️";
-                    statusEl.className = "text-xs px-3 py-1 rounded-full font-bold bg-red-500/20 text-red-400 border border-red-500/30";
-                }
-            }
-
-            const linkSuporte = document.getElementById('btnSuporteWhats');
-            if (linkSuporte) {
-                const msgSuporte = 'Olá, preciso de suporte na NextGen.TV.\nNome: ' + (dados.nome || '-') + '\nUsuário: ' + (dados.usuario || '-');
-                linkSuporte.href = linkSuporte.href.split('?')[0] + '?text=' + encodeURIComponent(msgSuporte);
-            }
-
-            if (soDados) return;
-
-            try { if (window.AndroidApp) window.AndroidApp.setCliente(telefone); } catch (e) {}
-            iniciarMensagens(telefone);
-            escutarPromocaoAtiva(telefone, dados);
-        }
-
-        // ================= SISTEMA DE PROMOÇÃO NO CLIENTE =================
-        let promoAtual = null;
-        let minhaPromo = null;
-        let telefoneSessao = "";
-        let pararPromoListener = null;
-
-        const escH = (t) => String(t ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-        const fmtBR = (s) => s ? s.split('-').reverse().join('/') : '';
-        const hojeISO = () => {
-            const d = new Date();
-            return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-        };
-        const lerPart = (id) => { try { return JSON.parse(localStorage.getItem('promo_part_' + id) || 'null'); } catch (e) { return null; } };
-        const gravarPart = (id, v) => { try { localStorage.setItem('promo_part_' + id, JSON.stringify(v)); } catch (e) {} };
-        const normalizaTel = (v) => {
-            let d = String(v || '').replace(/\D/g, '');
-            if ((d.length === 12 || d.length === 13) && d.startsWith('55')) d = d.slice(2);
-            return d;
-        };
-
-        const PLAQUINHA_SEM_PROMO = `
-            <div class="bg-zinc-950/80 border border-zinc-800 rounded-2xl p-5 text-center space-y-2 shadow-xl backdrop-blur-sm">
-                <div class="inline-flex items-center justify-center w-10 h-10 rounded-full bg-zinc-900 border border-zinc-800 text-amber-400 text-lg">🎁</div>
-                <h3 class="text-sm font-bold text-zinc-300">Aguarde novas promoções</h3>
-                <p class="text-[11px] text-zinc-500">Fique atento! Quando lançarmos um sorteio, você é avisado e ele aparece aqui.</p>
-            </div>`;
-
-        function desenharPromo() {
-            const container = document.getElementById('containerPromocao');
-            const p = promoAtual;
-            if (!p) { container.innerHTML = PLAQUINHA_SEM_PROMO; return; }
-
-            const hoje = hojeISO();
-            let acao = '';
-            if (minhaPromo) {
-                acao = `
-                    <div class="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 text-center space-y-1">
-                        <span class="text-xs text-amber-400 font-bold block">✨ Você já está participando!</span>
-                        <p class="text-xs text-zinc-300">Seu número da sorte é: <strong class="text-amber-400 font-mono text-base">#${escH(minhaPromo.numero)}</strong></p>
-                    </div>`;
-            } else if (hoje < p.dataInicio) {
-                acao = `<p class="text-xs text-center text-zinc-300 bg-zinc-900 border border-zinc-800 rounded-xl p-3">⏰ As inscrições abrem dia ${fmtBR(p.dataInicio)}. Volte aqui!</p>`;
-            } else if (hoje > p.dataFim) {
-                acao = `<p class="text-xs text-center text-zinc-300 bg-zinc-900 border border-zinc-800 rounded-xl p-3">🔒 Inscrições encerradas. Aguarde o resultado do sorteio!</p>`;
-            } else {
-                acao = `
-                    <button onclick="abrirModalInscricaoPromo()" class="w-full bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-black font-extrabold py-3.5 rounded-xl text-sm shadow-lg shadow-amber-500/30 transition">
-                        🎁 CLIQUE AQUI PARA PARTICIPAR!
-                    </button>`;
-            }
-
-            container.innerHTML = `
-                <div class="relative overflow-hidden bg-gradient-to-b from-amber-950/40 to-zinc-950 border-2 border-amber-500/50 rounded-2xl p-5 shadow-2xl space-y-3">
-                    <div class="flex items-center justify-between gap-2">
-                        <span class="bg-amber-500/20 text-amber-400 text-[10px] font-extrabold px-2.5 py-1 rounded-full uppercase tracking-wider border border-amber-500/30 animate-pulse">🔥 PROMOÇÃO</span>
-                        <span class="text-[10px] text-zinc-400 font-mono">Inscrições de ${fmtBR(p.dataInicio)} até ${fmtBR(p.dataFim)}</span>
-                    </div>
-                    <div>
-                        <h3 class="text-lg font-black text-amber-300">${escH(p.titulo)}</h3>
-                        <p class="text-sm text-amber-200 font-bold mt-0.5">🏆 ${escH(p.premio)}</p>
-                        ${p.descricao ? `<p class="text-xs text-zinc-300 mt-2">${escH(p.descricao)}</p>` : ''}
-                    </div>
-                    ${acao}
-                </div>`;
-        }
-
-        function escutarPromocaoAtiva(telefoneCliente, dadosCliente) {
-            telefoneSessao = normalizaTel(telefoneCliente);
-            const container = document.getElementById('containerPromocao');
-            container.innerHTML = PLAQUINHA_SEM_PROMO;
-            if (pararPromoListener) pararPromoListener();
-
-            pararPromoListener = onSnapshot(
-                query(collection(db, "promocoes"), where("status", "==", "ativa")),
-                async (snap) => {
-                    let melhor = null;
-                    snap.forEach((d) => {
-                        const p = { id: d.id, ...d.data() };
-                        if (!melhor || (p.criadaEm?.seconds || 0) > (melhor.criadaEm?.seconds || 0)) melhor = p;
-                    });
-
-                    if (!melhor) { promoAtual = null; minhaPromo = null; desenharPromo(); return; }
-
-                    try { if (window.AndroidApp) window.AndroidApp.promoVista(melhor.id); } catch (e) {}
-
-                    let minha = lerPart(melhor.id);
-                    if (!minha && telefoneSessao) {
-                        try {
-                            const ps = await getDoc(doc(db, "participantes_promocao", melhor.id + '_' + telefoneSessao));
-                            if (ps.exists()) { minha = { numero: ps.data().numero, nome: ps.data().nome }; gravarPart(melhor.id, minha); }
-                        } catch (e) { console.warn("Não foi possível checar participação:", e); }
+                    document.getElementById('mensagemPlayerInput').value = dados.mensagem || '';
+                    document.getElementById('tituloPlayerInput').value = dados.titulo || 'Aviso Importante';
+                    if (dados.imagem) {
+                        imagemBase64Atual = dados.imagem;
+                        const preview = document.getElementById('previewImagem');
+                        preview.src = dados.imagem;
+                        preview.classList.remove('hidden');
                     }
-                    promoAtual = melhor;
-                    minhaPromo = minha;
-                    desenharPromo();
-                },
-                (err) => { console.error("Erro ao ler promoções:", err); document.getElementById('containerPromocao').innerHTML = PLAQUINHA_SEM_PROMO; }
-            );
+                }
+            } catch (e) { console.error("Erro ao buscar mensagem:", e); }
         }
 
-        window.abrirModalInscricaoPromo = () => {
-            const salvo = localStorage.getItem('nextgen_cliente');
-            if (salvo) {
-                const dados = JSON.parse(salvo);
-                document.getElementById('promoNomeInput').value = dados.nome || '';
-                document.getElementById('promoZapInput').value = dados.id || '';
-            }
-            document.getElementById('modalInscricaoPromo').classList.remove('hidden');
+        window.processarImagem = (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = new Image();
+                img.onload = function() {
+                    const esc = Math.min(1, 800 / Math.max(img.width, img.height));
+                    const c = document.createElement('canvas');
+                    c.width = Math.round(img.width * esc);
+                    c.height = Math.round(img.height * esc);
+                    const ctx = c.getContext('2d');
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(0, 0, c.width, c.height);
+                    ctx.drawImage(img, 0, 0, c.width, c.height);
+                    imagemBase64Atual = c.toDataURL('image/jpeg', 0.7);
+                    const preview = document.getElementById('previewImagem');
+                    preview.src = imagemBase64Atual;
+                    preview.classList.remove('hidden');
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
         };
 
-        window.fecharModalInscricaoPromo = () => {
-            document.getElementById('modalInscricaoPromo').classList.add('hidden');
+        window.removerImagem = () => {
+            imagemBase64Atual = "";
+            document.getElementById('inputImagem').value = "";
+            const preview = document.getElementById('previewImagem');
+            preview.src = "";
+            preview.classList.add('hidden');
         };
 
-        window.confirmarParticipacaoSorteio = async () => {
-            const p = promoAtual;
-            if (!p) { alert("Esta promoção não está mais disponível."); fecharModalInscricaoPromo(); return; }
-
-            const nome = document.getElementById('promoNomeInput').value.trim().replace(/\s+/g, ' ');
-            const tel = normalizaTel(document.getElementById('promoZapInput').value);
-
-            if (nome.length < 3) { alert("Digite seu nome completo."); return; }
-            if (!/^\d{10,11}$/.test(tel)) { alert("Digite o WhatsApp com DDD. Ex: 51999999999"); return; }
-            const hoje = hojeISO();
-            if (hoje < p.dataInicio || hoje > p.dataFim) { alert("As inscrições não estão abertas neste momento."); return; }
-
-            const btn = document.getElementById('btnConfirmarPromo');
-            btn.disabled = true;
-            btn.classList.add('opacity-60');
-            const textoOriginal = btn.innerText;
-            btn.innerText = "Gerando seu número...";
-
-            const partRef = doc(db, "participantes_promocao", p.id + '_' + tel);
+        window.entrar = async () => {
+            const email = document.getElementById('loginEmail').value.trim();
+            const senha = document.getElementById('loginSenha').value;
+            const erro = document.getElementById('loginErro');
+            erro.textContent = '';
+            if (!email || !senha) { erro.textContent = 'Preencha e-mail e senha.'; return; }
             try {
-                let final = null;
-                let jaExistia = false;
-                for (let i = 0; i < 30 && !final; i++) {
-                    const numero = 10000 + Math.floor(Math.random() * 90000);
-                    const numRef = doc(db, "promocoes", p.id, "numeros", String(numero));
-                    const res = await runTransaction(db, async (tx) => {
-                        const ja = await tx.get(partRef);
-                        if (ja.exists()) return { existente: ja.data() };
-                        const n = await tx.get(numRef);
-                        if (n.exists()) return { ocupado: true };
-                        tx.set(numRef, { tel });
-                        tx.set(partRef, { promoId: p.id, nome, telefone: tel, numero, criadoEm: serverTimestamp() });
-                        return { numero, nome };
-                    });
-                    if (res.ocupado) continue;
-                    if (res.existente) { jaExistia = true; final = { numero: res.existente.numero, nome: res.existente.nome }; }
-                    else final = res;
-                }
-                if (!final) throw new Error("sem número livre");
-
-                minhaPromo = { numero: final.numero, nome: final.nome };
-                gravarPart(p.id, minhaPromo);
-                fecharModalInscricaoPromo();
-                desenharPromo();
-                alert(jaExistia
-                    ? `Você já estava participando! 🎉\nSeu Número da Sorte é: #${final.numero}`
-                    : `Inscrição realizada com sucesso! 🎉\nSeu Número da Sorte é: #${final.numero}`);
+                await signInWithEmailAndPassword(auth, email, senha);
             } catch (e) {
-                console.error("Erro ao registrar participação:", e);
-                alert("Não foi possível concluir a inscrição. Verifique a internet e tente de novo.");
-            } finally {
-                btn.disabled = false;
-                btn.classList.remove('opacity-60');
-                btn.innerText = textoOriginal;
+                erro.textContent = 'E-mail ou senha incorretos.';
             }
         };
 
-        // ================= MENSAGENS INDIVIDUAIS E AVISOS GERAIS =================
-        let unsubMsgs = null, unsubGeral = null;
-        let msgsAtuais = [];
-        let geralAtual = null;
-        let telefoneMsgs = "";
+        window.sair = () => signOut(auth);
 
-        const lidasKey = (tel) => 'msgs_lidas_' + tel;
-        const lerLidas = (tel) => { try { return JSON.parse(localStorage.getItem(lidasKey(tel)) || '[]'); } catch (e) { return []; } };
-        const ocultasKey = (tel) => 'msgs_ocultas_' + tel;
-        const lerOcultas = (tel) => { try { return JSON.parse(localStorage.getItem(ocultasKey(tel)) || '[]'); } catch (e) { return []; } };
-        const gravarOcultas = (tel, arr) => { try { localStorage.setItem(ocultasKey(tel), JSON.stringify(arr)); } catch (e) {} };
-        let confirmandoLimpar = false;
-        const escM = (t) => String(t ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
-        function avisarAppVisto() {
-            try {
-                if (!window.AndroidApp || document.visibilityState !== 'visible') return;
-                const maxMsg = msgsAtuais.reduce((m, x) => (x.data && x.data > m ? x.data : m), '');
-                window.AndroidApp.visto(maxMsg, (geralAtual && geralAtual.atualizadoEm) || '');
-            } catch (e) {}
-        }
-
-        function renderGeral() {
-            const c = document.getElementById('containerAvisos');
-            const g = geralAtual;
-            if (g && g.ativo && g.mensagem) {
-                const img = (g.imagem && /^(data:image|https?:)/.test(g.imagem)) ? `<img src="${g.imagem}" class="mt-2 rounded-lg max-h-32 object-cover border border-zinc-800">` : '';
-                c.innerHTML = `
-                    <div class="bg-blue-600/10 border border-blue-500/30 rounded-xl p-4 space-y-2">
-                        <div class="flex justify-between items-center">
-                            <span class="text-xs font-bold text-blue-400 uppercase tracking-wider">📢 ${escM(g.titulo || 'Aviso Geral')}</span>
-                            <span class="text-[10px] text-zinc-400">Geral</span>
-                        </div>
-                        <p class="text-sm text-zinc-200">${escM(g.mensagem)}</p>
-                        ${img}
-                    </div>`;
+        onAuthStateChanged(auth, (user) => {
+            const tela = document.getElementById('telaLogin');
+            const painel = document.getElementById('conteudoPainel');
+            if (user) {
+                tela.classList.add('hidden');
+                painel.classList.remove('hidden');
+                carregarClientes();
+                carregarPedidosOrcamentos();
+                carregarMensagemPlayerAtual();
             } else {
-                c.innerHTML = '<p class="text-xs text-zinc-500 text-center py-4">Nenhum aviso no momento.</p>';
-            }
-        }
-
-        function renderMensagens() {
-            const tel = telefoneMsgs;
-            const c = document.getElementById('containerMensagens');
-            const badge = document.getElementById('badgeMensagens');
-            const btn = document.getElementById('btnLerTodas');
-            const lidas = new Set(lerLidas(tel));
-            const ocultas = new Set(lerOcultas(tel));
-            const lista = msgsAtuais.filter((m) => !ocultas.has(m.id)).sort((a, b) => (b.data || '').localeCompare(a.data || ''));
-            const novas = lista.filter((m) => !lidas.has(m.id)).length;
-
-            badge.textContent = novas > 0 ? novas + (novas > 1 ? ' novas' : ' nova') : '';
-            badge.classList.toggle('hidden', novas === 0);
-            btn.classList.toggle('hidden', novas === 0);
-            const btnL = document.getElementById('btnLimparMsgs');
-            btnL.classList.toggle('hidden', lista.length === 0);
-            if (!confirmandoLimpar) btnL.textContent = '🗑 Excluir todas';
-
-            if (lista.length === 0) {
-                c.innerHTML = '<p class="text-xs text-zinc-500 text-center py-4">Nenhuma mensagem pessoal por enquanto.</p>';
-                return;
-            }
-            c.innerHTML = lista.map((m) => {
-                const nova = !lidas.has(m.id);
-                const quando = m.data ? new Date(m.data).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
-                return `
-                    <div class="${nova ? 'bg-emerald-600/15 border-emerald-400/60' : 'bg-emerald-600/5 border-emerald-500/20'} border rounded-xl p-4 space-y-2">
-                        <div class="flex justify-between items-center gap-2">
-                            <span class="text-xs font-bold text-emerald-400 uppercase tracking-wider">${nova ? '🔵 ' : ''}${escM(m.titulo || 'Mensagem do Suporte')}</span>
-                            <span class="text-[10px] text-zinc-400 shrink-0">${quando}</span>
-                        </div>
-                        <p class="text-sm text-zinc-200 whitespace-pre-line">${escM(m.mensagem)}</p>
-                        <div class="flex justify-end">
-                            <button onclick="excluirMensagem('${m.id}')" class="text-[11px] text-zinc-500 hover:text-red-400 transition py-1 px-2">🗑 excluir</button>
-                        </div>
-                    </div>`;
-            }).join('');
-        }
-
-        window.marcarMensagensLidas = () => {
-            const set = new Set(lerLidas(telefoneMsgs));
-            msgsAtuais.forEach((m) => set.add(m.id));
-            try { localStorage.setItem(lidasKey(telefoneMsgs), JSON.stringify([...set])); } catch (e) {}
-            renderMensagens();
-        };
-
-        window.excluirMensagem = (id) => {
-            const s = new Set(lerOcultas(telefoneMsgs));
-            s.add(id);
-            gravarOcultas(telefoneMsgs, [...s]);
-            renderMensagens();
-        };
-
-        window.excluirTodasMensagens = () => {
-            const btn = document.getElementById('btnLimparMsgs');
-            if (!confirmandoLimpar) {
-                confirmandoLimpar = true;
-                btn.textContent = '⚠️ Toque de novo para excluir todas';
-                setTimeout(() => { confirmandoLimpar = false; btn.textContent = '🗑 Excluir todas'; }, 3500);
-                return;
-            }
-            confirmandoLimpar = false;
-            const s = new Set(lerOcultas(telefoneMsgs));
-            msgsAtuais.forEach((m) => s.add(m.id));
-            gravarOcultas(telefoneMsgs, [...s]);
-            renderMensagens();
-        };
-
-        function iniciarMensagens(telefone) {
-            telefoneMsgs = telefone;
-            if (unsubMsgs) unsubMsgs();
-            if (unsubGeral) unsubGeral();
-
-            unsubMsgs = onSnapshot(collection(db, "clientes", telefone, "mensagens_app"), (snap) => {
-                msgsAtuais = [];
-                snap.forEach((d) => msgsAtuais.push({ id: d.id, ...d.data() }));
-                renderMensagens();
-                avisarAppVisto();
-            }, (e) => {
-                console.error("Erro nas mensagens:", e);
-                document.getElementById('containerMensagens').innerHTML = '<p class="text-xs text-red-400 text-center py-2">Erro ao carregar mensagens.</p>';
-            });
-
-            unsubGeral = onSnapshot(doc(db, "configuracoes", "aviso_player"), (s) => {
-                geralAtual = s.exists() ? s.data() : null;
-                renderGeral();
-                avisarAppVisto();
-            }, (e) => {
-                console.error("Erro no aviso geral:", e);
-                document.getElementById('containerAvisos').innerHTML = '<p class="text-xs text-red-400 text-center py-2">Erro ao carregar avisos.</p>';
-            });
-        }
-
-        async function atualizarDadosCliente() {
-            const salvo = localStorage.getItem('nextgen_cliente');
-            if (!salvo) return;
-            const id = JSON.parse(salvo).id;
-            try {
-                const snap = await getDoc(doc(db, "clientes", id));
-                if (snap.exists()) {
-                    const dados = snap.data();
-                    localStorage.setItem('nextgen_cliente', JSON.stringify({ id, ...dados }));
-                    carregarPainelCliente(id, dados, true);
-                }
-            } catch (e) { console.warn("Sem conexão para atualizar os dados:", e); }
-        }
-
-        document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') {
-                avisarAppVisto();
-                atualizarDadosCliente();
+                painel.classList.add('hidden');
+                tela.classList.remove('hidden');
             }
         });
 
-        window.sairCliente = () => {
-            try { if (window.AndroidApp) window.AndroidApp.setCliente(''); } catch (e) {}
-            localStorage.removeItem('nextgen_cliente');
-            location.reload();
-        };
-
-        window.onload = () => {
-            const salvo = localStorage.getItem('nextgen_cliente');
-            if (salvo) {
-                const dadosCliente = JSON.parse(salvo);
-                document.getElementById('telefoneLogin').value = dadosCliente.id;
-                carregarPainelCliente(dadosCliente.id, dadosCliente);
-                atualizarDadosCliente();
-            }
-        };
+        const escHtml = (t) => String(t ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     </script>
 </head>
-<body class="bg-black text-white min-h-screen p-4 md:p-8 flex justify-center">
+<body class="bg-black text-white min-h-screen p-6">
 
-    <div class="w-full max-w-md space-y-6">
-
-        <div id="pwaBanner" style="display:none;background:linear-gradient(90deg,#059669,#0d9488);border-radius:16px;padding:12px 14px;color:#fff;font-family:system-ui,-apple-system,Roboto,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.45)">
+    <div id="pwaBanner" style="display:none;position:fixed;top:8px;left:8px;right:8px;max-width:420px;margin:0 auto;z-index:100;background:linear-gradient(90deg,#059669,#0d9488);border-radius:16px;padding:12px 14px;color:#fff;font-family:system-ui,-apple-system,Roboto,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.45)">
         <div style="display:flex;align-items:center;justify-content:space-between">
             <div style="font-weight:800;font-size:14px">📲 Instale o app no seu celular</div>
             <button id="pwaFechar" aria-label="Fechar" style="background:none;border:0;color:#fff;font-size:24px;line-height:1;cursor:pointer;padding:0 4px">×</button>
@@ -462,256 +550,241 @@
     </div>
 
 
-        <!-- TELA DE LOGIN DO CLIENTE -->
-        <div id="telaLoginCliente" class="bg-zinc-950 border border-zinc-800 rounded-2xl p-6 shadow-2xl space-y-6 mt-12">
-            <div class="text-center space-y-2">
-                <h1 class="text-2xl font-black text-blue-500 tracking-wide">NEXTGEN<span class="text-white">.TV</span></h1>
-                <p class="text-xs text-zinc-400">acesse toda tecnologia da NextGen.TV na palma de sua mão</p>
+    <!-- Tela de Login -->
+    <div id="telaLogin" class="fixed inset-0 z-50 bg-black flex items-center justify-center p-4">
+        <div class="w-full max-w-sm bg-zinc-950 border border-zinc-800 rounded-2xl p-8 space-y-5">
+            <div class="text-center space-y-1">
+                <h1 class="text-2xl font-extrabold text-blue-500">Painel Master</h1>
+                <p class="text-sm text-zinc-400">Acesso restrito</p>
             </div>
+            <input type="email" id="loginEmail" placeholder="E-mail" autocomplete="username"
+                class="w-full bg-black border border-zinc-800 rounded-xl px-4 py-3 text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition">
+            <input type="password" id="loginSenha" placeholder="Senha" autocomplete="current-password"
+                class="w-full bg-black border border-zinc-800 rounded-xl px-4 py-3 text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition">
+            <button onclick="entrar()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl shadow-lg transition">Entrar</button>
+            <p id="loginErro" class="text-xs text-red-400 text-center min-h-[1rem]"></p>
+        </div>
+    </div>
 
-            <div class="space-y-4">
-                <div>
-                    <label class="text-xs text-zinc-400 block mb-1">WhatsApp / Telefone</label>
-                    <input type="text" id="telefoneLogin" placeholder="Ex: 51999999999" 
-                        class="w-full bg-black border border-zinc-800 rounded-xl p-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition">
-                </div>
-                <button onclick="fazerLoginCliente()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl text-xs shadow-lg shadow-blue-600/20 transition">
-                    Entrar na Minha Conta
+    <!-- Conteúdo Principal do Painel -->
+    <div id="conteudoPainel" class="hidden max-w-6xl mx-auto space-y-6">
+        
+        <!-- Cabeçalho -->
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-zinc-950 border border-zinc-800 p-6 rounded-2xl shadow-xl">
+            <div>
+                <h1 class="text-2xl font-extrabold text-blue-500">Painel Master - NextGen TV</h1>
+                <p class="text-sm text-zinc-400">Gestão de Clientes, Vencimentos e Acessos</p>
+            </div>
+            <div class="flex items-center gap-3 flex-wrap">
+                <!-- Botão para abrir o Player Web incorporado -->
+                <a href="navegador-index.html" target="_blank" rel="noopener" class="bg-blue-600/20 hover:bg-blue-600 text-blue-400 hover:text-white border border-blue-600/30 px-4 py-2 rounded-xl text-xs font-semibold transition flex items-center gap-1.5">
+                    📺 Abrir Player Web
+                </a>
+                <button onclick="location.reload()" class="bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 px-4 py-2 rounded-xl text-xs font-semibold transition">
+                    Atualizar Painel
                 </button>
-                <p id="erroLogin" class="text-xs text-red-400 text-center min-h-[1rem]"></p>
-                <button class="nb-entry" onclick="nbClick(this)">🤖 Fale com o assistente<small>v5</small></button>
+                <button onclick="sair()" class="bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 px-4 py-2 rounded-xl text-xs font-semibold transition">
+                    Sair
+                </button>
             </div>
         </div>
 
-        <!-- PAINEL PRINCIPAL DO CLIENTE -->
-        <div id="painelCliente" class="hidden space-y-5">
-            
-            <!-- Cabeçalho -->
-            <div class="bg-zinc-950 border border-zinc-800 rounded-2xl p-5 flex justify-between items-center shadow-xl">
+        <!-- Gestão e Cadastro de Clientes -->
+        <div class="bg-zinc-950 border border-emerald-600/30 rounded-2xl p-6 shadow-xl space-y-4">
+            <div class="flex items-center justify-between">
+                <h2 class="text-lg font-bold text-white flex items-center gap-2">
+                    <span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+                    Cadastro de Clientes, Credenciais e Prazos
+                </h2>
+                <span id="totalClientes" class="text-xs bg-emerald-600/20 text-emerald-400 border border-emerald-600/30 px-3 py-1 rounded-full font-mono">0 clientes</span>
+            </div>
+
+            <!-- Formulário Novo Cliente -->
+            <div class="grid grid-cols-1 md:grid-cols-5 gap-3 bg-black/40 p-4 rounded-xl border border-zinc-900 items-end">
                 <div>
-                    <h2 id="nomeClienteExibicao" class="text-lg font-bold text-white">Carregando...</h2>
-                    <span id="planoClienteExibicao" class="text-xs text-blue-400 font-semibold">Plano</span>
+                    <label class="text-[11px] text-zinc-400 block mb-1">Nome</label>
+                    <input type="text" id="novoNomeCliente" placeholder="Nome do Cliente" 
+                        class="w-full bg-black border border-zinc-800 rounded-xl p-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-emerald-500 transition">
                 </div>
-                <div class="flex flex-col items-end gap-2">
-                    <span id="statusVencimentoExibicao" class="text-xs px-3 py-1 rounded-full font-bold bg-zinc-800 text-zinc-300">...</span>
-                    <button onclick="sairCliente()" class="text-[11px] text-zinc-500 hover:text-red-400 transition">Sair</button>
+                <div>
+                    <label class="text-[11px] text-zinc-400 block mb-1">WhatsApp</label>
+                    <input type="text" id="novoZapCliente" placeholder="51999999999" 
+                        class="w-full bg-black border border-zinc-800 rounded-xl p-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-emerald-500 transition">
+                </div>
+                <div>
+                    <label class="text-[11px] text-zinc-400 block mb-1">Usuário</label>
+                    <input type="text" id="novoUsuarioCliente" placeholder="Usuário IPTV" 
+                        class="w-full bg-black border border-zinc-800 rounded-xl p-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-emerald-500 transition font-mono">
+                </div>
+                <div>
+                    <label class="text-[11px] text-zinc-400 block mb-1">Senha</label>
+                    <input type="text" id="novoSenhaCliente" placeholder="Senha IPTV" 
+                        class="w-full bg-black border border-zinc-800 rounded-xl p-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-emerald-500 transition font-mono">
+                </div>
+                <div>
+                    <label class="text-[11px] text-zinc-400 block mb-1">Plano</label>
+                    <select id="novoPlanoCliente" class="w-full bg-black border border-zinc-800 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-emerald-500 transition">
+                        <option value="0.5|Teste 12h">⚡ Teste 12h</option>
+                        <option value="30|30 Dias (Mensal)" selected>📅 30 Dias (Mensal)</option>
+                        <option value="90|90 Dias (Trimestral)">🗓️ 90 Dias (Trimestral)</option>
+                        <option value="365|365 Dias (Anual)">⭐ Anual (365 Dias)</option>
+                    </select>
                 </div>
             </div>
 
-            <!-- RENOVAR PLANO (PIX) -->
-            <div id="ngRenovar" class="bg-zinc-950 border border-emerald-500/30 rounded-2xl p-5 shadow-xl space-y-3">
-                <button id="ngRenovarBtn" onclick="ngAbrirRenovar()" class="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-extrabold py-3.5 px-4 rounded-2xl text-sm shadow-lg transition">
-                    🔄 Renovar plano
+            <div class="flex justify-end">
+                <button onclick="salvarNovoCliente()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-6 py-3 rounded-xl text-xs shadow-lg transition">
+                    + Cadastrar Novo Cliente
                 </button>
-                <div id="ngRenovarCorpo" class="hidden space-y-3">
-                    <p class="text-xs text-zinc-400">Escolha o plano e pague pelo PIX:</p>
-                    <div id="ngPlanos" class="space-y-2"></div>
-                    <div id="ngPix" class="hidden space-y-3 bg-black border border-zinc-800 rounded-xl p-4">
-                        <p id="ngPixTitulo" class="text-sm font-bold text-emerald-400"></p>
-                        <textarea id="ngPixCodigo" readonly rows="4" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2 text-[11px] text-zinc-300 font-mono break-all"></textarea>
-                        <button id="ngPixCopiar" onclick="ngCopiarPix()" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl text-xs transition">📋 Copiar código PIX</button>
-                        <p class="text-[11px] text-zinc-400 leading-relaxed">No app do seu banco, escolha <b>Pix → Pix Copia e Cola</b>, cole o código e confira o valor e o recebedor (<b>CRISTIAN A BESMINOFF</b>) antes de pagar.</p>
-                        <a id="ngPixZap" href="#" target="_blank" rel="noopener" class="block w-full text-center bg-green-600 hover:bg-green-500 text-white font-bold py-3 rounded-xl text-xs transition">💬 Já paguei — enviar comprovante</a>
-                        <p class="text-[10px] text-zinc-500">Depois de pagar, envie o comprovante para liberarmos a renovação.</p>
-                    </div>
-                </div>
             </div>
 
-            <!-- ASSISTENTE -->
-            <button class="nb-entry" onclick="nbClick(this)">🤖 Assistente: suporte, indicação e teste grátis<small>v5</small></button>
-
-            <!-- CARD DINÂMICO DE PROMOÇÃO / FUTUROS EVENTOS -->
-            <div id="containerPromocao">
-                <!-- Injetado em tempo real via JS -->
+            <!-- Tabela de Clientes -->
+            <div class="overflow-x-auto border border-zinc-900 rounded-xl">
+                <table class="w-full text-left text-sm">
+                    <thead class="bg-zinc-900/80 text-zinc-400 uppercase text-xs tracking-wider border-b border-zinc-800">
+                        <tr>
+                            <th class="px-6 py-4">Nome</th>
+                            <th class="px-6 py-4">WhatsApp</th>
+                            <th class="px-6 py-4">Credenciais</th>
+                            <th class="px-6 py-4">Plano</th>
+                            <th class="px-6 py-4">Tempo Restante</th>
+                            <th class="px-6 py-4 text-right">Ações (Wpp / App / Outros)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tabelaClientesCorpo"></tbody>
+                </table>
             </div>
+        </div>
 
-            <!-- CREDENCIAIS DE ACESSO -->
-            <div class="bg-zinc-950 border border-blue-600/30 rounded-2xl p-5 shadow-xl space-y-3">
-                <h3 class="text-xs font-bold text-zinc-400 uppercase tracking-wider">🔑 Seus Dados de Acesso</h3>
-                <div class="bg-black/50 p-4 rounded-xl border border-zinc-900 space-y-2 font-mono text-sm">
-                    <div class="flex justify-between">
-                        <span class="text-zinc-500">Usuário:</span>
-                        <span id="usuarioExibicao" class="text-white font-bold">...</span>
-                    </div>
-                    <div class="flex justify-between">
-                        <span class="text-zinc-500">Senha:</span>
-                        <span id="senhaExibicao" class="text-white font-bold">...</span>
-                    </div>
-                    <div class="flex justify-between">
-                        <span class="text-zinc-500">Servidor:</span>
-                        <span id="servidorExibicao" class="text-blue-400 font-bold">...</span>
-                    </div>
-                </div>
+        <!-- Bloco de Mensagem Geral para o App (Broadcast) -->
+        <div class="bg-zinc-950 border border-blue-600/30 rounded-2xl p-6 shadow-xl space-y-4">
+            <div class="flex items-center justify-between">
+                <h2 class="text-lg font-bold text-white flex items-center gap-2">
+                    <span class="inline-block w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse"></span>
+                    Mensagem Geral para Todos os Apps (Broadcast)
+                </h2>
+                <span class="text-xs text-blue-400">Envia para o painel de avisos de todos os clientes</span>
             </div>
-
-            <!-- BOTÃO DE ATALHO EXTERNO PARA JOGOS DO DIA -->
-            <a href="https://www.uol.com.br/esporte/futebol/central-de-jogos/#/" target="_blank" 
-               class="w-full bg-zinc-950 hover:bg-zinc-900 border border-zinc-800 text-white font-bold py-3.5 px-4 rounded-2xl text-xs flex items-center justify-between transition shadow-lg">
-                <span class="flex items-center gap-2">⚽ Consulte os Jogos do Dia <span class="text-[10px] bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded font-normal">Externo</span></span>
-                <span class="text-blue-400 text-sm">➔</span>
-            </a>
-
-            <!-- MINHAS MENSAGENS (individuais) -->
-            <div class="bg-zinc-950 border border-emerald-500/30 rounded-2xl p-5 shadow-xl space-y-3">
-                <div class="flex items-center justify-between gap-2">
-                    <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider">💬 Minhas Mensagens</h3>
-                    <span id="badgeMensagens" class="hidden text-[10px] font-bold bg-emerald-500 text-black px-2 py-0.5 rounded-full"></span>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div class="md:col-span-1">
+                    <label class="text-xs text-zinc-400 mb-1 block">Título</label>
+                    <input type="text" id="tituloPlayerInput" placeholder="Ex: Aviso Geral" 
+                        class="w-full bg-black border border-zinc-800 rounded-xl p-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition">
                 </div>
-                <div id="containerMensagens" class="space-y-3">
-                    <p class="text-xs text-zinc-500 text-center py-2">A carregar mensagens...</p>
-                </div>
-                <button id="btnLerTodas" onclick="marcarMensagensLidas()" class="hidden w-full text-[11px] text-zinc-400 hover:text-white border border-zinc-800 rounded-xl py-2 transition">✔ Marcar todas como lidas</button>
-                <button id="btnLimparMsgs" onclick="excluirTodasMensagens()" class="hidden w-full text-[11px] text-red-400 hover:text-red-300 border border-red-900/40 rounded-xl py-2 transition">🗑 Excluir todas</button>
-            </div>
-
-            <!-- CENTRAL DE AVISOS -->
-            <div class="bg-zinc-950 border border-zinc-800 rounded-2xl p-5 shadow-xl space-y-3">
-                <h3 class="text-xs font-bold text-zinc-400 uppercase tracking-wider">📢 Avisos & Comunicados</h3>
-                <div id="containerAvisos" class="space-y-3">
-                    <!-- Os avisos carregam aqui -->
+                <div class="md:col-span-3">
+                    <label class="text-xs text-zinc-400 mb-1 block">Mensagem Geral</label>
+                    <input type="text" id="mensagemPlayerInput" placeholder="Ex: Novos filmes disponíveis..." 
+                        class="w-full bg-black border border-zinc-800 rounded-xl p-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition">
                 </div>
             </div>
-
-            <!-- BOTÃO WHATSAPP SUPORTE -->
-            <a id="btnSuporteWhats" href="https://wa.me/5551989498171?text=Olá,%20preciso%20de%20suporte%20na%20NextGen.TV" target="_blank" 
-               class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3.5 px-4 rounded-2xl text-sm shadow-lg shadow-emerald-600/20 transition flex items-center justify-center gap-2">
-                💬 Falar com Suporte no WhatsApp
-            </a>
-
-            <!-- GUIA DE INSTALAÇÃO PASSO A PASSO -->
-            <div class="bg-zinc-950 border border-zinc-800 rounded-2xl p-5 shadow-xl space-y-4">
-                <h3 class="text-xs font-bold text-zinc-400 uppercase tracking-wider">📺 Como Instalar na sua TV</h3>
-                
-                <!-- Android TV / Fire Stick -->
-                <div class="border-b border-zinc-900 pb-3 space-y-2 text-xs text-zinc-300">
-                    <p class="font-bold text-blue-400">🤖 Android TV, TV Box e Fire Stick:</p>
-                    <ol class="list-decimal pl-4 space-y-1 text-zinc-400">
-                        <li>Instale o app <strong class="text-white">Downloader</strong> na loja de apps da sua TV.</li>
-                        <li>Abra o Downloader e digite o código <strong class="text-blue-400">2214174</strong>, depois clique em Ir (Go).</li>
-                        <li>Baixe, instale o player e abra.</li>
-                        <li>Insira o <strong class="text-white">Usuário</strong> e <strong class="text-white">Senha</strong> informados acima.</li>
-                    </ol>
+            <div class="space-y-2 pt-2 border-t border-zinc-900">
+                <label class="text-xs text-zinc-400 block">Anexar Imagem (Opcional)</label>
+                <div class="flex items-center gap-4">
+                    <input type="file" id="inputImagem" accept="image/*" onchange="processarImagem(event)"
+                        class="block w-full text-xs text-zinc-400 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-600/20 file:text-blue-400 cursor-pointer">
+                    <button onclick="removerImagem()" class="bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700 px-3 py-2 rounded-xl text-xs transition shrink-0">
+                        Remover Imagem
+                    </button>
                 </div>
-
-                <!-- Samsung / LG -->
-                <div class="space-y-2 text-xs text-zinc-300">
-                    <p class="font-bold text-blue-400">📺 Smart TVs Samsung e LG:</p>
-                    <ol class="list-decimal pl-4 space-y-1 text-zinc-400">
-                        <li>Abra a loja de aplicativos da sua TV e instale o aplicativo <strong class="text-white">Absoluto Player</strong>.</li>
-                        <li>Abra o aplicativo e utilize as credenciais fornecidas na área do cliente.</li>
-                    </ol>
+                <div class="mt-2">
+                    <img id="previewImagem" class="hidden max-h-40 rounded-xl border border-zinc-800 object-contain shadow-md" alt="Pré-visualização">
                 </div>
             </div>
+            <div class="flex justify-end gap-3 pt-4 border-t border-zinc-900">
+                <button onclick="desativarNoPlayer()" class="bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700 px-4 py-2 rounded-xl text-xs font-semibold transition">
+                    Desativar Mensagem Geral
+                </button>
+                <button onclick="enviarParaPlayer()" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-6 py-2 rounded-xl text-xs shadow-lg transition">
+                    🚀 Enviar Mensagem Geral para Todos
+                </button>
+            </div>
+        </div>
 
+        <!-- Pedidos e Orçamentos Recebidos -->
+        <div class="bg-zinc-950 border border-zinc-800 rounded-2xl overflow-hidden shadow-2xl">
+            <div class="p-4 border-b border-zinc-900 flex justify-between items-center">
+                <span class="font-bold text-sm text-zinc-300 flex items-center gap-2">
+                    <span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+                    Pedidos e Orçamentos Recebidos (Personalização de Players)
+                </span>
+                <span id="totalPedidos" class="text-xs bg-emerald-600/20 text-emerald-400 border border-emerald-600/30 px-3 py-1 rounded-full font-mono">0 pedidos</span>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left text-sm">
+                    <thead class="bg-zinc-900/80 text-zinc-400 uppercase text-xs tracking-wider border-b border-zinc-800">
+                        <tr>
+                            <th class="px-6 py-4">App / Rodapé</th>
+                            <th class="px-6 py-4">Cores Hexadecimais</th>
+                            <th class="px-6 py-4">Plano & Valores</th>
+                            <th class="px-6 py-4">Preview Player</th>
+                            <th class="px-6 py-4">Data</th>
+                            <th class="px-6 py-4 text-right">Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tabelaPedidosCorpo"></tbody>
+                </table>
+            </div>
         </div>
 
     </div>
 
-    <!-- MODAL DE INSCRIÇÃO NA PROMOÇÃO -->
-    <div id="modalInscricaoPromo" class="hidden fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4 backdrop-blur-sm">
-        <div class="w-full max-w-sm bg-zinc-950 border border-amber-500/40 rounded-2xl p-6 space-y-4 shadow-2xl">
-            <div class="text-center space-y-1">
-                <span class="text-2xl">🎁</span>
-                <h3 class="text-lg font-black text-amber-400">Inscrição na Promoção</h3>
-                <p class="text-xs text-zinc-400">Preencha seus dados para gerar seu número da sorte único!</p>
-            </div>
-
-            <div class="space-y-3">
-                <div>
-                    <label class="text-xs text-zinc-400 block mb-1">Seu Nome</label>
-                    <input type="text" id="promoNomeInput" placeholder="Ex: João Silva" 
-                        class="w-full bg-black border border-zinc-800 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-amber-500 transition">
-                </div>
-                <div>
-                    <label class="text-xs text-zinc-400 block mb-1">WhatsApp</label>
-                    <input type="text" id="promoZapInput" placeholder="Ex: 51999999999" 
-                        class="w-full bg-black border border-zinc-800 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-amber-500 transition font-mono">
-                </div>
-            </div>
-
+    <!-- MODAL MENSAGEM INDIVIDUAL -->
+    <div id="modalMensagemIndividual" class="hidden fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+        <div class="w-full max-w-md bg-zinc-950 border border-zinc-800 rounded-2xl p-6 space-y-4 shadow-2xl">
+            <h3 id="tituloMsgIndividual" class="text-lg font-bold text-white">Enviar Mensagem Interna</h3>
+            <input type="text" id="inputTituloIndividual" maxlength="60" placeholder="Título (opcional)"
+                class="w-full bg-black border border-zinc-800 rounded-xl p-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition mb-2">
+            <textarea id="inputTextoIndividual" rows="4" placeholder="Digite a mensagem para o app do cliente..." 
+                class="w-full bg-black border border-zinc-800 rounded-xl p-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 transition"></textarea>
+            <div id="listaMsgsIndividual" class="space-y-2 max-h-44 overflow-y-auto"></div>
             <div class="flex flex-col gap-2 pt-2">
-                <button id="btnConfirmarPromo" onclick="confirmarParticipacaoSorteio()" class="w-full bg-amber-500 hover:bg-amber-400 text-black font-extrabold py-3 rounded-xl text-xs transition shadow-lg shadow-amber-500/20">
-                    ✨ Confirmar Inscrição e Gerar Número
+                <button onclick="enviarMensagemIndividualApp()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl text-xs transition shadow-lg">
+                    📱 Enviar para o App
                 </button>
-                <button onclick="fecharModalInscricaoPromo()" class="w-full bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-zinc-800 py-2.5 rounded-xl text-xs transition">
+                <button onclick="fecharModalMensagemIndividual()" class="w-full bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-zinc-700 py-2 rounded-xl text-xs transition">
                     Cancelar
                 </button>
             </div>
         </div>
     </div>
 
-
-<!-- ================= PWA + RENOVAR PLANO (PIX) ================= -->
+    <!-- MODAL EDITAR CLIENTE -->
+    <div id="modalEditarCliente" class="hidden fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+        <div class="w-full max-w-md bg-zinc-950 border border-zinc-800 rounded-2xl p-6 space-y-4 shadow-2xl">
+            <h3 class="text-lg font-bold text-white">Editar Dados do Cliente</h3>
+            <input type="hidden" id="editWhatsappOriginal">
+            <div class="space-y-3">
+                <input type="text" id="editNomeCliente" placeholder="Nome" class="w-full bg-black border border-zinc-800 rounded-xl p-3 text-sm text-white">
+                <input type="text" id="editZapCliente" placeholder="WhatsApp" class="w-full bg-black border border-zinc-800 rounded-xl p-3 text-sm text-white">
+                <input type="text" id="editUsuarioCliente" placeholder="Usuário" class="w-full bg-black border border-zinc-800 rounded-xl p-3 text-sm text-white font-mono">
+                <input type="text" id="editSenhaCliente" placeholder="Senha" class="w-full bg-black border border-zinc-800 rounded-xl p-3 text-sm text-white font-mono">
+                <select id="editPlanoCliente" class="w-full bg-black border border-zinc-800 rounded-xl p-3 text-sm text-white">
+                    <option value="0.5|Teste 12h">⚡ Teste 12h</option>
+                    <option value="30|30 Dias (Mensal)">📅 30 Dias (Mensal)</option>
+                    <option value="90|90 Dias (Trimestral)">🗓️ 90 Dias (Trimestral)</option>
+                    <option value="365|365 Dias (Anual)">⭐ Anual (365 Dias)</option>
+                </select>
+                <div>
+                    <label class="text-xs text-zinc-400 block mb-1">Dias restantes</label>
+                    <input type="number" id="editDiasRestantes" min="0" step="1" oninput="atualizarInfoVenc()" class="w-full bg-black border border-zinc-800 rounded-xl p-3 text-sm text-white font-mono">
+                    <p id="editVencInfo" class="text-[11px] text-zinc-500 mt-1"></p>
+                    <input type="hidden" id="editRestOrig">
+                    <input type="hidden" id="editDataCadastroOrig">
+                </div>
+            </div>
+            <div class="flex flex-col gap-2 pt-3">
+                <button onclick="salvarEdicaoCliente()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl text-xs shadow-lg">
+                    💾 Salvar Alterações
+                </button>
+                <button onclick="fecharModalEditar()" class="w-full bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-zinc-700 py-2 rounded-xl text-xs transition">
+                    Cancelar
+                </button>
+            </div>
+        </div>
+    </div>
 <script>
 (function () {
   function $(id) { return document.getElementById(id); }
-
-  // ===== PLANOS E PIX (copia e cola) =====
-  var NG_WHATS = '5551982218563';   // WhatsApp que recebe o comprovante
-  var NG_PLANOS = [
-    { id: '30', nome: '30 dias', preco: 'R$ 22,90', tag: '', pix: '00020101021126360014br.gov.bcb.pix0114+5551989498171520400005303986540522.905802BR5920CRISTIAN A BESMINOFF6006CANOAS62070503***6304B99F' },
-    { id: '90', nome: '3 meses', preco: 'R$ 59,90', tag: '⭐ mais popular', pix: '00020101021126360014br.gov.bcb.pix0114+5551989498171520400005303986540559.905802BR5920CRISTIAN A BESMINOFF6006CANOAS62070503***63042C87' },
-    { id: '365', nome: '1 ano', preco: 'R$ 180,00', tag: 'R$ 15/mês', pix: '00020101021126360014br.gov.bcb.pix0114+55519894981715204000053039865406180.005802BR5920CRISTIAN A BESMINOFF6006CANOAS62070503***6304EADE' }
-  ];
-  window.NG_PLANOS = NG_PLANOS;
-
-  window.ngCopiar = function (texto) {
-    function fallback() {
-      try {
-        var t = document.createElement('textarea'); t.value = texto; t.setAttribute('readonly', '');
-        t.style.cssText = 'position:fixed;top:0;left:0;opacity:0'; document.body.appendChild(t);
-        t.select(); t.setSelectionRange(0, t.value.length);
-        var ok = document.execCommand('copy'); document.body.removeChild(t); return ok;
-      } catch (e) { return false; }
-    }
-    return new Promise(function (res) {
-      try {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(texto).then(function () { res(true); }, function () { res(fallback()); });
-          return;
-        }
-      } catch (e) {}
-      res(fallback());
-    });
-  };
-
-  var ngPlanoAtual = null;
-  function ngCliente() { try { return JSON.parse(localStorage.getItem('nextgen_cliente') || 'null') || {}; } catch (e) { return {}; } }
-
-  window.ngAbrirRenovar = function () {
-    var corpo = $('ngRenovarCorpo');
-    var abrir = corpo.classList.contains('hidden');
-    corpo.classList.toggle('hidden', !abrir);
-    if (abrir && !$('ngPlanos').children.length) {
-      $('ngPlanos').innerHTML = NG_PLANOS.map(function (p) {
-        return '<button onclick="ngEscolherPlano(\'' + p.id + '\')" class="w-full flex justify-between items-center bg-black border border-zinc-800 hover:border-emerald-500 rounded-xl p-4 text-left transition">' +
-          '<span class="text-sm font-bold text-white">' + p.nome + (p.tag ? ' <span class="text-[10px] text-emerald-400 font-semibold">· ' + p.tag + '</span>' : '') + '</span>' +
-          '<span class="text-emerald-400 font-extrabold text-sm">' + p.preco + '</span></button>';
-      }).join('');
-    }
-  };
-
-  window.ngEscolherPlano = function (id) {
-    var p = NG_PLANOS.filter(function (x) { return x.id === id; })[0]; if (!p) return;
-    ngPlanoAtual = p;
-    var c = ngCliente();
-    $('ngPixTitulo').textContent = 'Plano de ' + p.nome + ' · ' + p.preco;
-    $('ngPixCodigo').value = p.pix;
-    $('ngPixCopiar').textContent = '📋 Copiar código PIX';
-    var msg = 'Olá! Sou ' + (c.nome || 'cliente') + (c.usuario ? '. Usuário: ' + c.usuario : '') + '. Paguei o plano de ' + p.nome + ' (' + p.preco + ') via PIX e estou enviando o comprovante.';
-    $('ngPixZap').href = 'https://wa.me/' + NG_WHATS + '?text=' + encodeURIComponent(msg);
-    $('ngPix').classList.remove('hidden');
-    try { $('ngPix').scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
-  };
-
-  window.ngCopiarPix = function () {
-    if (!ngPlanoAtual) return;
-    window.ngCopiar(ngPlanoAtual.pix).then(function (ok) {
-      var b = $('ngPixCopiar');
-      b.textContent = ok ? '✅ Código copiado! Agora cole no app do banco' : '⚠️ Não copiou. Segure no código acima e copie';
-      setTimeout(function () { b.textContent = '📋 Copiar código PIX'; }, 4000);
-    });
-  };
 
   // ===== PWA: botão "Instalar app" =====
   var banner = $('pwaBanner'), btnInst = $('pwaBtn'), dica = $('pwaDica'), promptInstalar = null;
@@ -743,241 +816,8 @@
     mostrarBanner();
   }, 1800);
   if ('serviceWorker' in navigator && !dentroDoApk) {
-    window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
+    window.addEventListener('load', function () { navigator.serviceWorker.register('service-worker.js').catch(function () {}); });
   }
-})();
-</script>
-
-<!-- ================= ROBOZINHO DE ATENDIMENTO ================= -->
-<script>
-window.__nbErr = [];
-window.addEventListener('error', function (e) { try { window.__nbErr.push((e.message || 'erro') + ' [linha ' + (e.lineno || '?') + ']'); } catch (x) {} });
-window.nbClick = function (btn) {
-  if (window.nbToggle) { window.nbToggle(btn); return; }
-  var d = document.getElementById('nbErro');
-  if (!d) {
-    d = document.createElement('div'); d.id = 'nbErro';
-    d.style.cssText = 'margin-top:12px;background:#b91c1c;color:#fff;padding:12px 14px;border-radius:12px;font:13px/1.4 sans-serif';
-    d.onclick = function () { d.style.display = 'none'; };
-  }
-  if (btn && btn.parentNode) btn.parentNode.insertBefore(d, btn.nextSibling); else document.body.appendChild(d);
-  d.style.display = 'block';
-  d.textContent = 'O robô não carregou neste aparelho. ' + (window.__nbErr.length ? 'Erro: ' + window.__nbErr.join(' | ') : 'Nenhum erro registrado.') + ' (robô v5) Toque aqui para fechar.';
-};
-</script>
-<style>
-#nbBox{display:none;width:100%;height:70vh;max-height:560px;margin-top:12px;background:#0b1220;border:1px solid #1c2740;border-radius:20px;flex-direction:column;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,.5);font-family:system-ui,-apple-system,Roboto,sans-serif}
-.nb-entry{display:block;width:100%;border:0;border-radius:16px;padding:14px 16px;background:linear-gradient(90deg,#00E5FF,#3b82f6);color:#04121a;font-size:14px;font-weight:800;text-align:center;cursor:pointer;font-family:system-ui,-apple-system,Roboto,sans-serif}
-.nb-entry small{font-weight:600;opacity:.65;font-size:10px;margin-left:6px}
-#nbBox.open{display:flex}
-.nb-head{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:#0d1a30;border-bottom:1px solid #1c2740;color:#e8eefc;font-weight:700;font-size:15px}
-.nb-head small{display:block;font-weight:400;font-size:11px;color:#22c55e}
-.nb-x{background:none;border:0;color:#9aa6bd;font-size:26px;line-height:1;cursor:pointer}
-#nbMsgs{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:14px;display:flex;flex-direction:column}
-.nb-b{margin-bottom:10px;max-width:88%;padding:10px 13px;border-radius:16px;font-size:14px;line-height:1.4;white-space:pre-line;word-break:break-word}
-.nb-bot{align-self:flex-start;background:#14203a;color:#e8eefc;border-bottom-left-radius:4px}
-.nb-user{align-self:flex-end;background:#00E5FF;color:#04121a;font-weight:600;border-bottom-right-radius:4px}
-.nb-opts{display:flex;flex-wrap:wrap;margin-bottom:6px}
-.nb-opt{margin:0 8px 8px 0;background:transparent;border:1.5px solid #00E5FF;color:#00E5FF;border-radius:999px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;text-align:left}
-.nb-opt:active{background:#00E5FF;color:#04121a}
-.nb-wa{margin-bottom:10px;display:inline-block;background:#22c55e;color:#04210f;font-weight:800;border-radius:14px;padding:12px 16px;text-decoration:none;font-size:14px}
-.nb-typing{margin-bottom:10px;align-self:flex-start;color:#8a94a6;font-size:13px}
-#nbIn{display:none;padding:10px;border-top:1px solid #1c2740;background:#0d1423}
-#nbIn.show{display:flex}
-#nbIn input{flex:1;min-width:0;margin-right:8px;background:#05080f;border:1px solid #1c2740;color:#e8eefc;border-radius:12px;padding:11px 12px;font-size:16px;outline:none}
-#nbIn button{background:#00E5FF;color:#04121a;border:0;border-radius:12px;padding:0 16px;font-weight:800;cursor:pointer}
-</style>
-
-<div id="nbBox">
-  <div class="nb-head"><div>🤖 Assistente NextGen<small>● online</small></div><button class="nb-x" id="nbX" aria-label="Fechar">×</button></div>
-  <div id="nbMsgs"></div>
-  <div id="nbIn"><input id="nbCampo" type="text" autocomplete="off"><button id="nbSend">Enviar</button></div>
-</div>
-
-<script>
-(function () {
-  const WHATSAPP = '5551982218563';
-  const PLANOS = window.NG_PLANOS || [];
-  const BENEFICIO_INDICACAO = 'Quem indica ganha vantagens no plano!';
-
-  const $ = (id) => document.getElementById(id);
-  const msgs = $('nbMsgs'), box = $('nbBox'), inp = $('nbIn'), campo = $('nbCampo');
-  let nome = '', tel = '', usuario = '', cb = null, validar = null, iniciou = false;
-
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const rolar = () => { msgs.scrollTop = msgs.scrollHeight; };
-
-  function lerCliente() {
-    try { const c = JSON.parse(localStorage.getItem('nextgen_cliente') || 'null'); if (c) { nome = c.nome || nome; tel = c.id || tel; usuario = c.usuario || usuario; } } catch (e) {}
-  }
-  const quem = () => nome ? 'Olá! Sou ' + nome + (tel ? ' (' + tel + '), cliente' : '') + '.' + (usuario ? ' Usuário: ' + usuario + '.' : '') : 'Olá!';
-
-  function bolha(txt, cls) { const d = document.createElement('div'); d.className = 'nb-b ' + cls; d.textContent = txt; msgs.appendChild(d); rolar(); }
-  async function bot(txt) {
-    const t = document.createElement('div'); t.className = 'nb-typing'; t.textContent = 'digitando...'; msgs.appendChild(t); rolar();
-    await sleep(450); t.remove(); bolha(txt, 'nb-bot');
-  }
-  const user = (txt) => bolha(txt, 'nb-user');
-
-  function removerOpcoes() { const o = $('nbOpts'); if (o) o.remove(); }
-  function opcoes(lista) {
-    removerOpcoes();
-    const w = document.createElement('div'); w.className = 'nb-opts'; w.id = 'nbOpts';
-    lista.forEach((o) => {
-      const b = document.createElement('button'); b.className = 'nb-opt'; b.textContent = o[0];
-      b.onclick = () => { removerOpcoes(); user(o[0]); o[1](); };
-      w.appendChild(b);
-    });
-    msgs.appendChild(w); rolar();
-  }
-
-  function pedir(ph, val, fn, tipo) {
-    campo.placeholder = ph; campo.inputMode = tipo === 'tel' ? 'numeric' : 'text';
-    validar = val; cb = fn; campo.value = ''; inp.classList.add('show'); setTimeout(() => campo.focus(), 60);
-  }
-  function fecharInput() { inp.classList.remove('show'); cb = null; validar = null; campo.blur(); }
-  function enviarCampo() {
-    const v = campo.value.trim(); if (!v || !cb) return;
-    const r = validar ? validar(v) : { ok: true, valor: v };
-    if (!r.ok) { bot(r.msg); return; }
-    removerOpcoes(); user(v);
-    const f = cb; fecharInput(); f(r.valor);
-  }
-  $('nbSend').onclick = enviarCampo;
-  campo.addEventListener('keydown', (e) => { if (e.key === 'Enter') enviarCampo(); });
-
-  function wa(rotulo, msg) {
-    const a = document.createElement('a'); a.className = 'nb-wa'; a.target = '_blank'; a.rel = 'noopener';
-    a.href = 'https://wa.me/' + WHATSAPP + '?text=' + encodeURIComponent(msg); a.textContent = rotulo;
-    const w = document.createElement('div'); w.appendChild(a); msgs.appendChild(w); rolar();
-  }
-
-  function garantirNome(fn) {
-    lerCliente(); if (nome) { fn(); return; }
-    bot('Antes de começar, qual é o seu nome?').then(() =>
-      pedir('Seu nome', (v) => v.length >= 2 ? { ok: true, valor: v } : { ok: false, msg: 'Digite seu nome, por favor.' }, (v) => { nome = v; fn(); }));
-  }
-
-  async function menu(saudar) {
-    if (saudar) { lerCliente(); const p = nome ? nome.split(' ')[0] : ''; await bot('Oi' + (p ? ', ' + p : '') + '! 👋 Eu sou o assistente da NextGen.TV.\nComo posso ajudar?'); }
-    else await bot('Posso ajudar em mais alguma coisa?');
-    opcoes([
-      ['🎁 Teste grátis (12h)', testeGratis], ['💬 Falar com suporte', suporte], ['🎁 Indicar um amigo', indicar],
-      ['🔄 Renovar meu plano', renovar], ['💰 Planos e preços', planos], ['📺 Como instalar na TV', instalar], ['❓ Dúvidas', duvidas]
-    ]);
-  }
-  const voltar = () => menu(false);
-  const botaoVoltar = () => opcoes([['↩ Voltar ao menu', voltar]]);
-
-  async function testeGratis() {
-    await bot('O teste grátis dura 12 horas. 🎁\nVocê prefere com ou sem canais adultos?');
-    opcoes([
-      ['🔞 Com adultos', () => enviarTeste('com adultos')],
-      ['✅ Sem adultos', () => enviarTeste('sem adultos')]
-    ]);
-  }
-  function enviarTeste(tipo) {
-    garantirNome(async () => {
-      await bot('Perfeito! Teste de 12 horas ' + tipo + '.\nToque no botão para pedir pelo WhatsApp. 👇');
-      wa('💬 Pedir teste grátis', quem() + ' Quero um teste grátis de 12 horas ' + tipo + '.');
-      botaoVoltar();
-    });
-  }
-
-  async function suporte() {
-    await bot('Qual é o assunto?');
-    opcoes([
-      ['📡 Sem sinal / travando', () => dica('Sem sinal ou travando', '1) Reinicie a TV/aparelho e o roteador (tire da tomada por 30 segundos).\n2) Teste com outra rede, como o 4G do celular.\n3) Confira o usuário e a senha no quadro "Seus Dados de Acesso".')],
-      ['🔑 Senha ou acesso', () => dica('Senha ou acesso', 'Seu usuário e senha estão no quadro "Seus Dados de Acesso", aqui na área do cliente. Confira se digitou exatamente igual, sem espaços.')],
-      ['💳 Pagamento', () => falar('Pagamento')],
-      ['🙋 Outro assunto', () => falar('Outro assunto')]
-    ]);
-  }
-  async function dica(assunto, texto) {
-    await bot(texto); await bot('Isso resolveu?');
-    opcoes([['✅ Resolveu, obrigado!', async () => { await bot('Que bom! 🎉'); voltar(); }], ['💬 Ainda preciso de ajuda', () => falar(assunto)]]);
-  }
-  function falar(assunto) {
-    garantirNome(async () => {
-      await bot('Quer contar rapidamente o que está acontecendo? (opcional)');
-      opcoes([['Pular', () => { fecharInput(); enviarSuporte(assunto, ''); }]]);
-      pedir('Descreva em poucas palavras', (v) => ({ ok: true, valor: v }), (v) => enviarSuporte(assunto, v));
-    });
-  }
-  async function enviarSuporte(assunto, detalhe) {
-    await bot('Perfeito! Toque no botão para abrir o WhatsApp com tudo preenchido. É só enviar. 👇');
-    wa('💬 Abrir WhatsApp', quem() + ' Preciso de suporte: ' + assunto + '.' + (detalhe ? ' ' + detalhe : ''));
-    botaoVoltar();
-  }
-
-  // ===== INDICAÇÃO DE AMIGO (COM MENSAGEM PARA VOCÊ E CÓDIGO ALEATÓRIO) =====
-  function indicar() {
-    garantirNome(async () => {
-      const codigoAleatorio = Math.floor(1000 + Math.random() * 9000);
-      await bot('Que legal! 🎁 Indique um amigo para o teste grátis.\n\nQual é o nome do seu amigo?');
-      pedir('Nome do amigo', (v) => v.length >= 2 ? { ok: true, valor: v } : { ok: false, msg: 'Digite o nome do seu amigo.' }, async (nomeAmigo) => {
-        await bot('E qual o WhatsApp do ' + nomeAmigo + '? (com DDD)');
-        pedir('Ex: 51999999999', (v) => { const d = v.replace(/\D/g, ''); return (d.length === 10 || d.length === 11) ? { ok: true, valor: d } : { ok: false, msg: 'Confira o número: DDD + número, ex.: 51999999999.' }; }, async (zapAmigo) => {
-          await bot('Tudo pronto! Geramos seu código de indicação único: 🔑 #' + codigoAleatorio + '\n\nToque no botão abaixo para me enviar os dados da indicação pelo WhatsApp. 👇');
-          wa('💬 Enviar Indicação para o suporte', quem() + ' Quero indicar um amigo para o teste grátis!\n👤 Nome do amigo: ' + nomeAmigo + '\n📱 WhatsApp do amigo: ' + zapAmigo + '\n🔑 Meu Código de Indicação: #' + codigoAleatorio);
-          botaoVoltar();
-        }, 'tel');
-      });
-    });
-  }
-
-  async function renovar() {
-    await bot('Qual plano você quer?');
-    opcoes(PLANOS.map((p) => [p.nome + ' · ' + p.preco + (p.tag ? ' · ' + p.tag : ''), () => pagarPix(p)]));
-  }
-  async function pagarPix(p) {
-    await bot('Plano de ' + p.nome + ': ' + p.preco + '.\nPague pelo PIX copia e cola (código abaixo):');
-    bolha(p.pix, 'nb-bot');
-    const b = document.createElement('button'); b.className = 'nb-opt'; b.textContent = '📋 Copiar código PIX';
-    b.onclick = () => { window.ngCopiar(p.pix).then((ok) => { b.textContent = ok ? '✅ Código copiado!' : '⚠️ Segure no código acima e copie'; }); };
-    const w = document.createElement('div'); w.appendChild(b); msgs.appendChild(w); rolar();
-    await bot('No app do seu banco: Pix → Pix Copia e Cola. Confira o recebedor CRISTIAN A BESMINOFF e pague. Depois envie o comprovante: 👇');
-    garantirNome(() => {
-      wa('💬 Enviar comprovante', quem() + ' Paguei o plano de ' + p.nome + ' (' + p.preco + ') via PIX. Segue o comprovante.');
-      botaoVoltar();
-    });
-  }
-  async function planos() {
-    await bot('Nossos planos:\n' + PLANOS.map((p) => '• ' + p.nome + ' — ' + p.preco + (p.tag ? ' (' + p.tag + ')' : '')).join('\n'));
-    opcoes([['🔄 Quero renovar', renovar], ['↩ Voltar ao menu', voltar]]);
-  }
-
-  async function instalar() {
-    await bot('Qual é a sua TV?');
-    opcoes([
-      ['🤖 Android TV, TV Box, Fire Stick', async () => { await bot('1) Instale o app Downloader na loja da TV.\n2) Abra e digite o código 2214174, depois Ir (Go).\n3) Baixe, instale o player e abra.\n4) Entre com o usuário e a senha da área do cliente.'); fimInstalar(); }],
-      ['📺 Smart TV Samsung / LG', async () => { await bot('1) Na loja de apps da sua TV, procure por Absoluto Player.\n2) Abra o aplicativo e utilize as credenciais de Usuário, Senha e URL fornecidas na sua área do cliente.'); fimInstalar(); }]
-    ]);
-  }
-  function fimInstalar() { opcoes([['💬 Preciso de ajuda', () => falar('Ajuda para instalar')], ['↩ Voltar ao menu', voltar]]); }
-
-  async function duvidas() {
-    await bot('Qual é a sua dúvida?');
-    opcoes([
-      ['📱 Em quais aparelhos funciona?', () => resp('Funciona em Smart TV, TV Box, Fire Stick, celulares Android e iOS e também no PC/Notebook.')],
-      ['🔓 Tem fidelidade?', () => resp('Não. Você renova só se quiser.')],
-      ['🎁 Como testar grátis?', testeGratis],
-      ['🙋 Outra dúvida', () => falar('Dúvida')]
-    ]);
-  }
-  async function resp(t) { await bot(t); fimDuvida(); }
-  function fimDuvida() { opcoes([['❓ Outra dúvida', duvidas], ['↩ Voltar ao menu', voltar]]); }
-
-  function avisarApp(aberto) { try { if (window.AndroidApp && window.AndroidApp.chatAberto) window.AndroidApp.chatAberto(aberto); } catch (e) {} }
-  window.nbToggle = (btn) => {
-    const mesmoLugar = btn && box.previousElementSibling === btn;
-    if (box.classList.contains('open') && (!btn || mesmoLugar)) { box.classList.remove('open'); avisarApp(false); return; }
-    if (btn && btn.parentNode) btn.parentNode.insertBefore(box, btn.nextSibling);
-    box.classList.add('open'); avisarApp(true);
-    if (!iniciou) { iniciou = true; menu(true); }
-    setTimeout(() => { try { box.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) { box.scrollIntoView(); } }, 80);
-  };
-  $('nbX').onclick = () => { box.classList.remove('open'); avisarApp(false); };
 })();
 </script>
 
